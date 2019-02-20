@@ -12,7 +12,7 @@ def do_connect():
         sta_if.connect('HomeTech_1', 'r0k0r0kmxbr')
         while not sta_if.isconnected():	
             print(".", end="")
-			time.sleep(1)
+            sleep(1)
     print('network config:', sta_if.ifconfig())
  
 do_connect()
