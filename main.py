@@ -13,10 +13,10 @@ SCLPIN = 22
 SDAPIN=21
 
 
-LEDPIN = 16
-DHTPIN = 22
-SOILPIN = 32
-LIGHTPIN = 34
+# LEDPIN = 16
+# DHTPIN = 22
+# SOILPIN = 32
+# LIGHTPIN = 34
 
 
 #Setup BME680
@@ -45,10 +45,12 @@ sensor.select_gas_heater_profile(0)
 burn_in_time = 300
 
 
-def sensor_burnin(burn_in_time = burn_in_time):
+def sensor_burnin():
+    global sensor
     # Collect gas resistance burn-in values, then use the average
     # of the last 50 values to set the upper limit for calculating
     # gas_baseline.
+    global burn_in_time
     print("Collecting gas resistance burn-in data for {0} mins\n".format(burn_in_time/60))
     start_time = time.time()
     curr_time = time.time()
@@ -77,6 +79,8 @@ def calculate_gas_baseline():
     print ("Memory available {0} bytes after gas resistance calculation".format(gc.mem_free()))
     return gas_baseline
 
+sensor_burnin()
+
 gas_baseline = calculate_gas_baseline()
 
 # Set the humidity baseline to 40%, an optimal indoor humidity.
@@ -88,7 +92,60 @@ hum_weighting = 0.25
 
 print("Gas baseline: {0} Ohms, humidity baseline: {1:.2f} %RH\n".format(gas_baseline, hum_baseline))
 
+def get_air_quality_data():
+    global sensor
+    global gas_baseline
+    global hum_baseline
+    global hum_weighting
 
+    if sensor.get_sensor_data() and sensor.data.heat_stable:
+        gas = sensor.data.gas_resistance
+        gas_offset = gas_baseline - gas
+
+        hum = sensor.data.humidity
+        hum_offset = hum - hum_baseline
+
+        # Calculate hum_score as the distance from the hum_baseline.
+        if hum_offset > 0:
+            hum_score = (100 - hum_baseline - hum_offset) / (100 - hum_baseline) * (hum_weighting * 100)
+
+        else:
+            hum_score = (hum_baseline + hum_offset) / hum_baseline * (hum_weighting * 100)
+
+        # Calculate gas_score as the distance from the gas_baseline.
+        if gas_offset > 0:
+            gas_score = (gas / gas_baseline) * (100 - (hum_weighting * 100))
+
+        else:
+            gas_score = 100 - (hum_weighting * 100)
+
+        # Calculate air_quality_score. 
+        air_quality_score = hum_score + gas_score
+
+        output = "Gas: {0:.2f} Ohms, humidity: {1:.2f} %RH, air quality: {2:.2f}".format(
+            gas, 
+            hum, 
+            air_quality_score)
+        print(output)
+
+        return gas, hum, air_quality_score
+
+def get_environment_data():
+    global sensor
+    if sensor.get_sensor_data():
+        temp = sensor.data.temperature
+        pressure = sensor.data.pressure
+        humidity = sensor.data.humidity
+        gas = sensor.data.gas_resistance
+
+        output = "{} C, {} hPa, {} RH, {} RES,".format(
+            temp,
+            pressure,
+            humidity,
+            gas)
+        print(output)
+
+        return temp, pressure,  humidity, gas
 
 
 
@@ -98,14 +155,14 @@ def settimeout(duration):
     pass
 
 
-# Function for taking average of 100 analog readings
-def smooth_reading():
-    avg = 0
-    _AVG_NUM = 100
-    for _ in range(_AVG_NUM):
-        avg += soil_sensor.read()
-    avg /= _AVG_NUM
-    return(avg)
+# # Function for taking average of 100 analog readings
+# def smooth_reading():
+#     avg = 0
+#     _AVG_NUM = 100
+#     for _ in range(_AVG_NUM):
+#         avg += soil_sensor.read()
+#     avg /= _AVG_NUM
+#     return(avg)
 
 
 # MQTT setup
@@ -115,48 +172,41 @@ client.connect()
 mqtt_topic = "bme680"
 
 
-# DHT11
-sensor = dht.DHT11(machine.Pin(DHTPIN))
+# # DHT11
+# sensor = dht.DHT11(machine.Pin(DHTPIN))
 
 # Moisture sensor
-def soil_moisture_sensor(PIN):
-    from machine import ADC, Pin
-    adc = ADC(Pin(32)) 
-    adc.atten(ADC.ATTN_11DB)
-    adc.width(ADC.WIDTH_12BIT)
-    return adc
+# def soil_moisture_sensor(PIN):
+#     from machine import ADC, Pin
+#     adc = ADC(Pin(32)) 
+#     adc.atten(ADC.ATTN_11DB)
+#     adc.width(ADC.WIDTH_12BIT)
+#     return adc
 
-soil_sensor = soil_moisture_sensor(SOILPIN)
+# soil_sensor = soil_moisture_sensor(SOILPIN)
 
 print("Polling:")
 try:
     while True:
-        sensor.measure()
+
+        temp, pressure,  humidity, gas = get_environment_data()
+        #sensor.measure()
         # d.measure()
         # d.temperature()
         # d.humidity()
-        output = "{} C, {} RH".format(
-            sensor.temperature(),
-            sensor.humidity()
-        )
-        print(output)
-        client.publish(mqtt_topic, output)
+        # output = "{} C, {} RH".format(
+        #     sensor.temperature(),
+        #     sensor.humidity()
+        # )
+        # print(output)
+        # client.publish(mqtt_topic, output)
 
         # Publish on individual topics for consistency
-        client.publish('home/higrow/humidity', str(sensor.humidity()))
-        client.publish('home/higrow/temperature', str(sensor.temperature()))
+        client.publish('home/bme680/humidity', str(humidity))
+        client.publish('home/bme680/temperature', str(temp))
+        client.publish('home/bme680/pressure', str(pressure))
+        client.publish('home/bme680/gas_resistance', str(gas))
 
-        # Read the analogue soil moisture sensor
-        # _THRESHOLD = 3000
-        soil_moisture = smooth_reading()
-        client.publish('home/higrow/soil-moisture', str(soil_moisture))
-        print(soil_moisture)
-
-        # if analog_val < _THRESHOLD:
-        #     print("Water_detected!")
-        #     client.publish('bme680-water', "ON")
-        # else:
-        #     client.publish('bme680-water', "OFF")
         time.sleep(3)
 
 except Exception as e:
